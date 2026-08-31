@@ -6,6 +6,20 @@
 
 ## Unreleased
 
+- 新增纯离线宝可梦图鉴页面（`demo_pokedex.c`，菜单 “Pokédex”）：第 1 世代
+  1..151 号全部内嵌固件——基础数据、英文图鉴描述与 48×48 像素精灵图
+  （raw-deflate 压缩，由 `tools/gen_pokedex_static.py` 从
+  [PokeAPI](https://pokeapi.co/) 生成）。UP/DOWN 翻阅，OK 标记“已捕捉”，
+  捕捉/见过状态与上次查看编号保存到 NVS，掉电不丢失。界面为绿色电子图鉴屏，
+  背景色（#244238）与薄荷绿高亮取自参考站点 `pokedex.guoxudong.io` 打开图鉴
+  后的配色；精灵透明像素按该背景预混合，无白色边缘；单屏呈现精灵缩略图、
+  编号/名字/属性徽章、身高体重与概述文本。Wi-Fi/HTTPS 抓取、流式 JSON
+  （`pokedex_stream`/miniz）与 Pokédex menuconfig 选项已全部移除；
+  JSON/流模块及其宿主测试仅保留作参考。宿主机测试覆盖状态序列化黄金向量、
+  精灵图混合/解压、JSON 提取与静态图鉴表。
+- 图鉴页面 60 秒无按键自动把背光降到 25%，任意按键恢复 100%。
+- actionlint 安装脚本改为优先 `shasum`（macOS 自带 BSD `sha256sum` 不支持 GNU
+  `--check`），保证 macOS 上 `validate.sh --static` 可运行。
 - 将小程序 BLE 安装兼容提升为二创模板强制契约：固定保护 `cardid`/Recovery 分区，
   保留上键持续 5 秒进入 Recovery 的 bootloader hook，并在 CI 强制校验合并镜像结构、
   分区表 MD5/范围、3 MB 应用上限和保护分区数据不入包。
