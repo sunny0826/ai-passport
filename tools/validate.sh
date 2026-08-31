@@ -28,6 +28,29 @@ run_static_checks() {
         tests/test_ui_pixel_math.c main/ui_pixel_math.c \
         -o "${test_dir}/test_ui_pixel_math"
     "${test_dir}/test_ui_pixel_math"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_pokedex_core.c main/pokedex_core.c \
+        -o "${test_dir}/test_pokedex_core"
+    "${test_dir}/test_pokedex_core"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_pokedex_sprite.c main/pokedex_sprite.c main/pokedex_core.c \
+        main/vendor/lodepng.c \
+        -o "${test_dir}/test_pokedex_sprite"
+    "${test_dir}/test_pokedex_sprite"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_pokedex_json.c main/pokedex_core.c \
+        -o "${test_dir}/test_pokedex_json"
+    "${test_dir}/test_pokedex_json"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain -Imain/vendor/miniz \
+        tests/test_pokedex_stream.c main/pokedex_stream.c main/pokedex_core.c \
+        main/vendor/miniz/miniz_tinfl.c main/vendor/lodepng.c \
+        -o "${test_dir}/test_pokedex_stream"
+    "${test_dir}/test_pokedex_stream"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_pokedex_static.c main/pokedex_sprite.c main/pokedex_core.c \
+        main/pokedex_static.c main/vendor/lodepng.c \
+        -o "${test_dir}/test_pokedex_static"
+    "${test_dir}/test_pokedex_static"
     python3 tests/test_verify_firmware.py
     rm -rf "${test_dir}"
     echo "Host tests: PASS"
