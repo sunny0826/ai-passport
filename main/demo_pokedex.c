@@ -416,8 +416,9 @@ void demo_pokedex_enter(void)
     s_no = label_at(s_scr, s_lay.number, &lv_font_montserrat_14, CS_BG_DK);
     lv_label_set_text(s_no, "NO.001");
 
-    s_name = label_at(s_scr, s_lay.name, &lv_font_montserrat_20, CS_TEXT);
-    lv_label_set_long_mode(s_name, LV_LABEL_LONG_CLIP);
+    s_name = label_at(s_scr, s_lay.name, &lv_font_montserrat_14, CS_TEXT);
+    lv_label_set_long_mode(s_name, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_line_space(s_name, 0, 0);
     lv_label_set_text(s_name, "---");
 
     s_badge[0] = badge_create(s_scr, s_lay.badge[0], TYPE_COLORS[0]);

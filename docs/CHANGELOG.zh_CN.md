@@ -11,6 +11,7 @@
   130 字节位图），仍能迁入 v1 的 52 字节存档以免丢失已有记录。UP/DOWN 单击翻 1、
   双击跳 10、长按跳世代。属性芯片包含恶（`DRK`）。
   `tools/gen_pokedex_static.py` 缓存 PokeAPI 下载，并写入物种名（不用默认形态后缀）。
+- 图鉴长种名改为左列 14px 两行折行，避免 Squawkabilly 等名字画进精灵井。
 - 图鉴 OK 单击改为播放当前叫声（Opus 8 kbps / 16 kHz，长度前缀包，存放在
   `cryfs@0x35A000` 数据分区）。去掉 CAUGHT/WILD 芯片；NVS 仍保存见过与上次查看。
   叫声来自 PokeAPI latest OGG，由 `tools/gen_pokedex_cries.py` 转码。含 `cryfs`

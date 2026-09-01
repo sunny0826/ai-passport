@@ -15,6 +15,8 @@
   the next/previous generation). Type chips include Dark (`DRK`).
   `tools/gen_pokedex_static.py` caches PokeAPI downloads and writes
   species names (not default-form suffixes).
+- Wrapped long Pokédex species names onto two 14 px lines in the left
+  column so names such as Squawkabilly no longer draw over the sprite.
 - Replaced Pokédex catch toggling with cry playback: OK click plays the
   current species cry (Opus 8 kbps / 16 kHz, length-prefixed packets in
   a `cryfs` data partition at `0x35A000`). Catch/WILD chips are gone;

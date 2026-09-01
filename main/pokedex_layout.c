@@ -10,9 +10,10 @@ void pokedex_layout_build(pokedex_layout_t *out)
     if (!out) return;
     memset(out, 0, sizeof(*out));
 
-    /* 240x320 手持图鉴:顶栏身份,右上 96px 精灵井,左列编号/名/属性,
+    /* 240x320 手持图鉴:顶栏身份,右上 96px 精灵井,左列编号/两行名/属性,
        中部身高体重条,下部概述,底栏见过计数与按键提示。矩形之间留 4px 缝,
-       左列右缘 128、精灵井左缘 132,长属性名不再能把徽章推进井里。 */
+       左列右缘 128、精灵井左缘 132。名字用 14px 折行,最长种名
+       (SQUAWKABILLY / WALKING WAKE)不得画进精灵井。 */
     out->screen      = (pokedex_rect_t){0, 0, 240, 320};
     out->header      = (pokedex_rect_t){0, 0, 240, 22};
     out->header_rule = (pokedex_rect_t){0, 22, 240, 2};
@@ -26,10 +27,11 @@ void pokedex_layout_build(pokedex_layout_t *out)
 
     out->number_chip = (pokedex_rect_t){8, 30, 116, 18};
     out->number      = (pokedex_rect_t){12, 32, 108, 14};
-    out->name        = (pokedex_rect_t){8, 52, 120, 24};
-    out->badge[0]    = (pokedex_rect_t){8, 80, POKEDEX_LAYOUT_BADGE_W,
+    /* 14px 两行:左列 120px 够放下 12 字母种名,不与精灵井相交。 */
+    out->name        = (pokedex_rect_t){8, 52, 120, 36};
+    out->badge[0]    = (pokedex_rect_t){8, 92, POKEDEX_LAYOUT_BADGE_W,
                                         POKEDEX_LAYOUT_BADGE_H};
-    out->badge[1]    = (pokedex_rect_t){58, 80, POKEDEX_LAYOUT_BADGE_W,
+    out->badge[1]    = (pokedex_rect_t){58, 92, POKEDEX_LAYOUT_BADGE_W,
                                         POKEDEX_LAYOUT_BADGE_H};
 
     out->stats      = (pokedex_rect_t){8, 134, 224, 22};

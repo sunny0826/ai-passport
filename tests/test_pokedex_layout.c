@@ -63,6 +63,9 @@ static void test_bounds_and_nesting(void)
 
     CHECK(L.sprite.w == POKEDEX_LAYOUT_SPRITE_PX);
     CHECK(L.sprite.h == POKEDEX_LAYOUT_SPRITE_PX);
+    CHECK(L.name.w == 120);
+    CHECK(L.name.h >= 32); /* 14px 两行,长种名折行而不进精灵井 */
+    CHECK(L.name.x + L.name.w <= L.sprite_frame.x);
     CHECK(L.flavor_text.h >= 80); /* 至少约 5 行 14px 字 */
 }
 
@@ -86,6 +89,8 @@ static void test_no_sibling_overlap(void)
     check_no_overlap(L.name, L.badge[0], "name", "badge0");
     check_no_overlap(L.name, L.badge[1], "name", "badge1");
     check_no_overlap(L.badge[0], L.stats, "badge0", "stats");
+    check_no_overlap(L.badge[1], L.stats, "badge1", "stats");
+    check_no_overlap(L.name, L.stats, "name", "stats");
     check_no_overlap(L.sprite_frame, L.stats, "sprite", "stats");
     check_no_overlap(L.stats, L.flavor_frame, "stats", "flavor");
     check_no_overlap(L.flavor_frame, L.tally_seen, "flavor", "seen");

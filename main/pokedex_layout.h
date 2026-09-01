@@ -1,7 +1,7 @@
 // main/pokedex_layout.h —— 掌上图鉴 240x320 布局几何。
 // 纯 C,不依赖 ESP-IDF/LVGL,可在宿主机单测(tests/test_pokedex_layout.c)。
 // 页面把精灵井放到右上、身份信息放到左列,底部给概述和见过计数;所有矩形必须落在
-// 屏内且兄弟区域不相交,避免长属性名把徽章推进精灵框。
+// 屏内且兄弟区域不相交。名字折行限制在左列 120px 内,不得画进精灵井。
 #pragma once
 
 #include <stdbool.h>
