@@ -8,10 +8,10 @@
 [环境引导](environment-setup.zh_CN.md)完成安装。
 
 > 固件编译优先运行 `./tools/validate.sh --firmware`，烧录优先把验证通过的
-> `build/FoloToy-AI-Passport-full.bin` 写入空白设备；对已有身份的设备，只有合并文件
-> 在保护区 `cardid` 之前结束时才可从 `0x0` 直刷，其余情况优先用小程序或分段
-> `idf.py flash`。`idf.py build` 和
-> `idf.py flash` 只作为增量开发命令，不作为默认交付方式。
+> `build/FoloToy-AI-Passport-full.bin` 写入空白设备。该镜像含 `cardid` 之后的
+> `cryfs`，已写身份的设备必须用小程序安装或分段 `idf.py flash`（bootloader、
+> 分区表、app，以及 `cryfs@0x35A000`），禁止从 `0x0` 整包直刷。
+> `idf.py build` 和 `idf.py flash` 只作为增量开发命令，不作为默认交付方式。
 
 ```bash
 source <ESP-IDF-v5.5.3-路径>/export.sh

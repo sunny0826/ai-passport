@@ -11,12 +11,16 @@ idf_component_register(
          "demo_ble.c"
          "demo_low_power.c"
          "demo_pokedex.c"
+         "pokedex_layout.c"
          "pokedex_static.c"
          "pokedex_core.c"
          "pokedex_sprite.c"
+         "pokedex_cry.c"
+         "pokedex_cry_play.c"
          "vendor/lodepng.c"
     INCLUDE_DIRS "."
-    REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash
+    REQUIRES bsp bt esp_audio_codec esp_event esp_hw_support esp_netif
+             esp_partition esp_timer esp_wifi nvs_flash
 )
 
 # 离线精灵图 blob:嵌入只读段,符号 _binary_pokedex_sprites_bin_start/_end。

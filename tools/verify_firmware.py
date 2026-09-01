@@ -22,6 +22,9 @@ PARTITION_TABLE_SIZE = 0xC00
 APP_MAX_SIZE = 0x300000
 CARDID_OFFSET = 0x356000
 CARDID_SIZE = 0x4000
+CRYFS_OFFSET = 0x35A000
+CRYFS_SIZE = 0x3A6000
+CRYFS_MAGIC = b"CRY1"
 RECOVERY_OFFSET = 0x700000
 RECOVERY_SIZE = 0x100000
 ENTRY = struct.Struct("<HBBII16sI")
@@ -92,6 +95,10 @@ def verify_recovery_contract(merged: bytes, build_dir: Path) -> None:
         if by_label.get(label) != wanted:
             raise ValueError(f"partition {label!r} must remain {wanted}, got {by_label.get(label)}")
 
+    cryfs = by_label.get("cryfs")
+    if cryfs != Partition(1, 0x40, CRYFS_OFFSET, CRYFS_SIZE, "cryfs"):
+        raise ValueError(f"partition 'cryfs' must remain data/0x40 @ 0x35A000/0x3A6000, got {cryfs}")
+
     ordered = sorted(partitions, key=lambda item: item.offset)
     for left, right in zip(ordered, ordered[1:]):
         if left.end > right.offset:
@@ -119,6 +126,11 @@ def verify_recovery_contract(merged: bytes, build_dir: Path) -> None:
         payload = merged[offset : min(len(merged), offset + size)]
         if any(byte != 0xFF for byte in payload):
             raise ValueError(f"merged artifact contains forbidden {label} payload bytes")
+
+    if len(merged) < CRYFS_OFFSET + 16:
+        raise ValueError("merged artifact does not include the cryfs image")
+    if merged[CRYFS_OFFSET : CRYFS_OFFSET + 4] != CRYFS_MAGIC:
+        raise ValueError("merged artifact is missing the CRY1 cryfs payload")
 
     bootloader = (build_dir / "bootloader" / "bootloader.bin").read_bytes()
     if RECOVERY_BOOT_MARKER not in bootloader:

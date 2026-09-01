@@ -29,8 +29,8 @@ void pokedex_rgba_to_rgb565(const uint8_t *rgba, uint32_t w, uint32_t h,
 
 // ---------------------------------------------------------------------------
 // 离线精灵图 blob(工具生成,见 tools/gen_pokedex_static.py):
-//   [0..151*8)   TOC,每条 {off(u32le), len(u32le), w(u16le), h(u16le)}
-//   [151*8..)    raw-deflate 压缩的 RGB565 像素(解压后 w*h*2 字节)
+//   [0..DEX_SIZE*12) TOC,每条 {off(u32le), len(u32le), w(u16le), h(u16le)}
+//   [DEX_SIZE*12..)  raw-deflate 压缩的 RGB565 像素(解压后 w*h*2 字节)
 // ---------------------------------------------------------------------------
 // 解出第 id 只的 RGB565 精灵图(48x48)。out_cap 为输出缓冲的 u16 单元数。
 // 返回 false = 越界/解压失败/尺寸不符。

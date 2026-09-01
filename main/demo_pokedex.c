@@ -1,20 +1,23 @@
 // main/demo_pokedex.c —— 宝可梦图鉴(Pokédex)页面【纯离线版】。
 //
 // 数据与图片全部内置固件(生成产物 tools/gen_pokedex_static.py,来源 PokeAPI
-// CC-BY 4.0):第 1 世代 1..151 的基础数据 + 48x48 像素精灵图。
-// 交互:UP/DOWN 翻阅,OK 切换"已捕捉",长按 OK 返回菜单(由 main.c 拦截)。
-// 记录(捕捉/见过/上次查看)保存在 NVS(命名空间 "pokedex"),掉电不丢失。
+// CC-BY 4.0):全国图鉴 1..1025(第 I–IX 世代)的基础数据 + 48x48 像素精灵图。
+// 交互:UP/DOWN 单击翻 1,双击跳 10,长按跳世代;OK 单击播放当前叫声;
+// 长按 OK 返回菜单(由 main.c 拦截,本页不处理 OK 长按)。
+// 见过/上次查看保存在 NVS(命名空间 "pokedex"),掉电不丢失。
+// 叫声在 cryfs 分区,Opus 8 kbps;解码与 I2S 写入在独立任务,按键回调不阻塞。
 // 无任何网络/WiFi/HTTP 依赖。
 //
 // 线程模型:
-//   - 按键回调(main.c 的 on_key,持 LVGL 锁)只改 RAM 状态并唤醒轻量 worker;
-//     NVS 落盘(flash 写入)在 worker 任务里完成 —— 按键回调不阻塞。
+//   - 按键回调(main.c 的 on_key,持 LVGL 锁)只改 RAM 状态、投递叫声编号,
+//     并唤醒轻量 worker;NVS 落盘与 Opus 解码/I2S 写入都不在回调里。
 //   - 电量与"空闲降背光"用 lv_timer(LVGL 任务内,天然持锁)。
 #include "demo.h"
 #include "pokedex_core.h"
+#include "pokedex_layout.h"
 #include "pokedex_sprite.h"
 #include "pokedex_static.h"
-#include "ui_pixel.h"
+#include "pokedex_cry_play.h"
 #include "bsp_battery.h"
 #include "bsp_display.h"
 
@@ -29,13 +32,13 @@
 
 #include <string.h>
 
-#define POKEDEX_NVS_NS       "pokedex"
+#define POKEDEX_NVS_NS        "pokedex"
 #define POKEDEX_NVS_KEY_STATE "state"
 
 #define POKEDEX_WORKER_STACK 2048
 #define POKEDEX_WORKER_PRIO  5
 
-#define POKEDEX_IDLE_DIM_S   60 /* 无按键 60s 后背光降到 25% */
+#define POKEDEX_IDLE_DIM_S 60 /* 无按键 60s 后背光降到 25% */
 
 // ------------------------------ 图鉴屏幕配色 ------------------------------
 // 背景取 pokedex.guoxudong.io 打开图鉴后的屏幕底 #244238;文字白/浅灰,
@@ -47,9 +50,11 @@
 #define CS_BRIGHT 0x5BC0A8u  /* 薄荷绿:编号/HT chip 底 */
 #define CS_TEXT   0xFFFFFFu  /* 主文字:白 */
 #define CS_DIM    0x90A99Au  /* 次文字:灰绿 */
+#define CS_WARN   0xF0C070u  /* 低电:暖黄,深底上仍可读 */
 
 static const uint32_t TYPE_COLORS[POKEDEX_STATIC_TYPE_COUNT] = {
     [POKEDEX_STATIC_TYPE_BUG]      = 0xA6B91A,
+    [POKEDEX_STATIC_TYPE_DARK]     = 0x705746,
     [POKEDEX_STATIC_TYPE_DRAGON]   = 0x6F35FC,
     [POKEDEX_STATIC_TYPE_ELECTRIC] = 0xF7D02C,
     [POKEDEX_STATIC_TYPE_FAIRY]    = 0xD685AD,
@@ -68,14 +73,19 @@ static const uint32_t TYPE_COLORS[POKEDEX_STATIC_TYPE_COUNT] = {
     [POKEDEX_STATIC_TYPE_WATER]    = 0x6390F0,
 };
 
+static void apply_rect(lv_obj_t *o, pokedex_rect_t r)
+{
+    lv_obj_set_pos(o, r.x, r.y);
+    lv_obj_set_size(o, r.w, r.h);
+}
+
 // 无边框色块(编号条/镜头/装饰)。
-static lv_obj_t *flag_block(lv_obj_t *parent, int x, int y, int w, int h,
+static lv_obj_t *flag_block(lv_obj_t *parent, pokedex_rect_t r,
                             uint32_t color, int radius)
 {
     lv_obj_t *o = lv_obj_create(parent);
     lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_pos(o, x, y);
-    lv_obj_set_size(o, w, h);
+    apply_rect(o, r);
     lv_obj_set_style_radius(o, radius, 0);
     lv_obj_set_style_border_width(o, 0, 0);
     lv_obj_set_style_pad_all(o, 0, 0);
@@ -83,18 +93,27 @@ static lv_obj_t *flag_block(lv_obj_t *parent, int x, int y, int w, int h,
     return o;
 }
 
-// 属性徽章:圆角色块 + 白字(属性色保留,边框用 GB 深绿)。
-static lv_obj_t *badge_create(lv_obj_t *parent, int x, int y, int w, int h,
-                              uint32_t color, const char *text)
+static lv_obj_t *label_at(lv_obj_t *parent, pokedex_rect_t r,
+                          const lv_font_t *font, uint32_t color)
 {
-    lv_obj_t *o = flag_block(parent, x, y, w, h, color, 7);
+    lv_obj_t *l = lv_label_create(parent);
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+    apply_rect(l, r);
+    return l;
+}
+
+// 属性徽章:固定 3 字母宽,圆角色块 + 白字。
+static lv_obj_t *badge_create(lv_obj_t *parent, pokedex_rect_t r, uint32_t color)
+{
+    lv_obj_t *o = flag_block(parent, r, color, 6);
     lv_obj_set_style_border_width(o, 2, 0);
     lv_obj_set_style_border_color(o, lv_color_hex(CS_FRAME), 0);
     lv_obj_t *l = lv_label_create(o);
     lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(0xFFFFFF), 0);
     lv_obj_center(l);
-    lv_label_set_text(l, text);
+    lv_label_set_text(l, "-");
     return o;
 }
 
@@ -102,16 +121,15 @@ static lv_obj_t *badge_create(lv_obj_t *parent, int x, int y, int w, int h,
 static lv_obj_t      *s_scr;
 static lv_obj_t      *s_sprite;
 static lv_obj_t      *s_sprite_hint;
-static lv_obj_t      *s_name, *s_htwt, *s_battery;
+static lv_obj_t      *s_name, *s_htwt, *s_battery, *s_progress;
 static lv_obj_t      *s_no;          /* 编号条 "NO.001" */
 static lv_obj_t      *s_badge[2];    /* 属性徽章 */
-static lv_obj_t      *s_types;      /* 类型全名小字(GRASS / POISON) */
 static lv_obj_t      *s_desc;        /* 图鉴概述(英文) */
-static lv_obj_t      *s_status;      /* 状态行 */
-static lv_obj_t      *s_count;       /* CAUGHT/SEEN 计数行 */
+static lv_obj_t      *s_tally_seen;
 static lv_timer_t    *s_bat_timer;
 static lv_timer_t    *s_idle_timer;
 static uint8_t        s_idle_sec;
+static pokedex_layout_t s_lay;
 
 // 精灵图输出缓冲与 LVGL 图像描述(静态分配,避免碎片化)。
 static uint16_t       s_sprite_pixels[POKEDEX_SPRITE_MAX_BYTES / 2];
@@ -177,57 +195,38 @@ static void upper(char *s)
     }
 }
 
-static void ui_set_status(const char *text, bool error)
+static void ui_update_tally(void)
 {
-    if (!s_scr || !s_status) return;
-    lv_label_set_text(s_status, text);
-    lv_obj_set_style_text_color(s_status,
-        lv_color_hex(error ? UI_RED : CS_TEXT), 0);
+    char line[20];
+    if (!s_scr || !s_tally_seen) return;
+    pokedex_layout_format_seen(pokedex_count_seen(&s_state),
+                               line, sizeof(line));
+    lv_label_set_text(s_tally_seen, line);
 }
 
-static void ui_update_badges(void)
-{
-    if (!s_scr || !s_count) return;
-    uint32_t caught = pokedex_count_caught(&s_state);
-    uint32_t seen = pokedex_count_seen(&s_state);
-    char line[48];
-    snprintf(line, sizeof(line), "CAUGHT %u/151   SEEN %u/151",
-             (unsigned)caught, (unsigned)seen);
-    lv_label_set_text(s_count, line);
-    lv_obj_set_style_text_color(s_count, lv_color_hex(CS_TEXT), 0);
-}
-
-// 左信息列排放 1..2 枚属性徽章(从 x=16 起)。
+// 左列固定两枚 3 字母徽章;无第二属性则隐藏第二枚。
 static void layout_badges(uint8_t t0, uint8_t t1)
 {
     uint8_t idx[2] = { t0, t1 };
-    int shown = 0;
-    int widths[2] = { 0, 0 };
     for (int i = 0; i < 2; i++) {
-        if (idx[i] >= POKEDEX_STATIC_TYPE_COUNT) break;
-        const char *tn = pokedex_static_type_names[idx[i]];
-        widths[i] = (int)strlen(tn) * 7 + 22;
-        shown++;
-    }
-    if (shown == 0) {
-        for (int i = 0; i < 2; i++) lv_obj_add_flag(s_badge[i], LV_OBJ_FLAG_HIDDEN);
-        return;
-    }
-    int x = 16;
-    for (int i = 0; i < shown; i++) {
-        uint8_t ti = idx[i];
-        char up[16];
-        snprintf(up, sizeof(up), "%s", pokedex_static_type_names[ti]);
-        upper(up);
+        if (idx[i] >= POKEDEX_STATIC_TYPE_COUNT) {
+            lv_obj_add_flag(s_badge[i], LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        char abbr[8];
+        pokedex_layout_type_abbr(pokedex_static_type_names[idx[i]],
+                                 abbr, sizeof(abbr));
         lv_obj_t *l = lv_obj_get_child(s_badge[i], 0);
-        if (l) lv_label_set_text(l, up);
-        lv_obj_set_style_bg_color(s_badge[i], lv_color_hex(TYPE_COLORS[ti]), 0);
-        lv_obj_set_pos(s_badge[i], x, 100);
-        lv_obj_set_size(s_badge[i], widths[i], 20);
+        uint32_t bg = TYPE_COLORS[idx[i]];
+        if (l) {
+            lv_label_set_text(l, abbr);
+            lv_obj_set_style_text_color(l,
+                lv_color_hex(pokedex_layout_dark_ink(bg) ? CS_BG_DK : 0xFFFFFFu), 0);
+        }
+        lv_obj_set_style_bg_color(s_badge[i], lv_color_hex(bg), 0);
+        apply_rect(s_badge[i], s_lay.badge[i]);
         lv_obj_clear_flag(s_badge[i], LV_OBJ_FLAG_HIDDEN);
-        x += widths[i] + 10;
     }
-    for (int i = shown; i < 2; i++) lv_obj_add_flag(s_badge[i], LV_OBJ_FLAG_HIDDEN);
 }
 
 static void ui_show_sprite_locked(uint32_t dw, uint32_t dh)
@@ -241,19 +240,15 @@ static void ui_show_sprite_locked(uint32_t dw, uint32_t dh)
     s_sprite_dsc.data_size = dw * dh * 2;
     s_sprite_dsc.data = (const uint8_t *)s_sprite_pixels;
 
-    /* 右上角缩略图:48px 像素图放大 1.5 倍(72px),置于精灵框内。 */
-    lv_image_set_scale(s_sprite, 384);
-    lv_obj_set_size(s_sprite, 72, 72);
-    lv_obj_set_pos(s_sprite, 149, 43);
+    /* 右上精灵井:软件最近邻 2x 后 1:1 贴图,避免 LVGL 缩放把像素风抹糊。 */
+    apply_rect(s_sprite, s_lay.sprite);
     lv_image_set_src(s_sprite, &s_sprite_dsc);
     lv_obj_remove_flag(s_sprite, LV_OBJ_FLAG_HIDDEN);
-    if (s_sprite_hint) {
-        lv_obj_add_flag(s_sprite_hint, LV_OBJ_FLAG_HIDDEN);
-    }
+    if (s_sprite_hint) lv_obj_add_flag(s_sprite_hint, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ------------------------------ 本地离线显示 ------------------------------
-// 第 1 世代 151 只的基础数据与 48x48 像素精灵图内置在固件,切换零等待。
+// 全国图鉴 1..1025 的基础数据与 48x48 像素精灵图内置在固件,切换零等待。
 
 static void ui_apply_static_locked(uint32_t id)
 {
@@ -261,57 +256,40 @@ static void ui_apply_static_locked(uint32_t id)
     char buf[64];
 
     int n = pokedex_pretty_name(e->name, buf, sizeof(buf));
-    if (n > 0) {
-        for (size_t i = 0; buf[i]; i++) {
-            if (buf[i] >= 'a' && buf[i] <= 'z') buf[i] = (char)(buf[i] - 'a' + 'A');
-        }
-    }
+    if (n > 0) upper(buf);
     lv_label_set_text(s_name, buf);
-    lv_label_set_text_fmt(s_no, "NO.%03u", (unsigned)id);
+
+    pokedex_layout_format_no(id, buf, sizeof(buf));
+    lv_label_set_text(s_no, buf);
+
+    pokedex_layout_format_progress(id, buf, sizeof(buf));
+    lv_label_set_text(s_progress, buf);
 
     layout_badges(e->type0, e->type1);
 
-    {
-        char tl[40];
-        snprintf(tl, sizeof(tl), "%s", pokedex_static_type_names[e->type0]);
-        upper(tl);
-        if (e->type1 != POKEDEX_STATIC_TYPE_NONE) {
-            char t2[16];
-            snprintf(t2, sizeof(t2), "%s", pokedex_static_type_names[e->type1]);
-            upper(t2);
-            snprintf(buf, sizeof(buf), "%s / %s", tl, t2);
-        } else {
-            snprintf(buf, sizeof(buf), "%s", tl);
-        }
-        lv_label_set_text(s_types, buf);
-    }
-
-    snprintf(buf, sizeof(buf), "HT ");
-    pokedex_format_height(e->height_dm, buf + 3, sizeof(buf) - 3);
-    size_t used2 = strlen(buf);
-    snprintf(buf + used2, sizeof(buf) - used2, "   WT ");
-    pokedex_format_weight(e->weight_hg, buf + strlen(buf), sizeof(buf) - strlen(buf));
+    pokedex_layout_format_stats(e->height_dm, e->weight_hg, buf, sizeof(buf));
     lv_label_set_text(s_htwt, buf);
 
-    /* 概述:14px 三行约 84 字符,超长截断加 "..."。 */
-    size_t dl = strlen(e->desc);
-    if (dl > 84) {
-        char clip[90];
-        memcpy(clip, e->desc, 84);
-        memcpy(clip + 84, "...", 4);
+    {
+        char clip[POKEDEX_LAYOUT_DESC_MAX + 4];
+        pokedex_layout_clip_desc(e->desc, clip, sizeof(clip), 0);
         lv_label_set_text(s_desc, clip);
-    } else {
-        lv_label_set_text(s_desc, e->desc);
     }
 
-    ui_update_badges();
+    ui_update_tally();
 
     uint32_t w = 0, h = 0;
     if (pokedex_sprite_static(_binary_pokedex_sprites_bin_start,
-                              (size_t)(_binary_pokedex_sprites_bin_end - _binary_pokedex_sprites_bin_start),
-                              id, s_sprite_pixels, sizeof(s_sprite_pixels) / 2,
-                              &w, &h)) {
+                              (size_t)(_binary_pokedex_sprites_bin_end -
+                                       _binary_pokedex_sprites_bin_start),
+                              id, s_sprite_pixels,
+                              sizeof(s_sprite_pixels) / 2, &w, &h) &&
+        pokedex_layout_scale2x_rgb565(s_sprite_pixels, w, h, s_sprite_pixels,
+                                      sizeof(s_sprite_pixels) / 2, &w, &h)) {
         ui_show_sprite_locked(w, h);
+    } else if (s_sprite_hint) {
+        lv_obj_add_flag(s_sprite, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(s_sprite_hint, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -333,30 +311,32 @@ static void goto_id(uint32_t id)
     pokedex_mark_seen(&s_state, id);
     s_state_dirty = true;
     ui_apply_static_locked(id);
-    if (id == POKEDEX_DEX_FIRST || id == POKEDEX_DEX_LAST) {
-        ui_set_status("EDGE OF DEX", false);
-    } else {
-        ui_set_status("POKEDEX 1-151", false);
-    }
     if (s_worker) xTaskNotifyGive(s_worker); /* 落盘(见过/位置) */
 }
 
 void demo_pokedex_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 {
-    if (ev != BSP_BTN_CLICK) return;
+    /* OK 长按由 main.c 拦截返回菜单,本页不处理。 */
+    if (btn == BSP_BTN_OK && ev != BSP_BTN_CLICK) return;
+    if (ev != BSP_BTN_CLICK && ev != BSP_BTN_DOUBLE && ev != BSP_BTN_LONG) return;
+
     s_idle_sec = 0;
     bsp_display_backlight(100);
 
-    if (btn == BSP_BTN_UP) {
-        goto_id(pokedex_step(s_state.last_id, -1));
-    } else if (btn == BSP_BTN_DOWN) {
-        goto_id(pokedex_step(s_state.last_id, 1));
-    } else if (btn == BSP_BTN_OK) {
+    if (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) {
+        int32_t dir = (btn == BSP_BTN_UP) ? -1 : 1;
         uint32_t id = s_state.last_id;
-        pokedex_set_caught(&s_state, id, !pokedex_is_caught(&s_state, id));
-        s_state_dirty = true;
-        ui_update_badges();
-        if (s_worker) xTaskNotifyGive(s_worker); /* 触发落盘 */
+        if (ev == BSP_BTN_CLICK) {
+            id = pokedex_step(id, dir);
+        } else if (ev == BSP_BTN_DOUBLE) {
+            id = pokedex_step(id, dir * 10);
+        } else {
+            id = pokedex_step_gen(id, dir);
+        }
+        pokedex_cry_play_stop();
+        goto_id(id);
+    } else if (btn == BSP_BTN_OK && ev == BSP_BTN_CLICK) {
+        pokedex_cry_play_request(s_state.last_id);
     }
 }
 
@@ -368,10 +348,12 @@ static void bat_tick(lv_timer_t *t)
     int soc = bsp_battery_soc();
     if (soc < 0) {
         lv_label_set_text(s_battery, "--");
+        lv_obj_set_style_text_color(s_battery, lv_color_hex(CS_DIM), 0);
     } else {
         lv_label_set_text_fmt(s_battery, "%d%%", soc);
+        /* 深色顶栏必须用浅字;低电改暖黄,避免 UI_INK 几乎看不见。 */
         lv_obj_set_style_text_color(s_battery,
-            lv_color_hex(soc < 20 ? UI_RED : UI_INK), 0);
+            lv_color_hex(soc < 20 ? CS_WARN : CS_TEXT), 0);
     }
 }
 
@@ -389,131 +371,81 @@ void demo_pokedex_enter(void)
 {
     nvs_flash_init();
     state_load();
+    pokedex_cry_play_init();
     if (!s_worker) {
         xTaskCreate(worker_main, "pokedex", POKEDEX_WORKER_STACK, NULL,
                     POKEDEX_WORKER_PRIO, &s_worker);
     }
 
-    /* ---------- 早期 Game Boy 绿屏风格(整屏 = 一台 GB 图鉴) ---------- */
-    /* 早期绿色电子屏:整机暗墨绿底,荧光绿字,屏幕区带亮绿细框;
-       左上基础信息(编号/名字/属性徽章),右上精灵缩略图,
-       屏下身高体重条与概述(DEX ENTRY)。精灵透明底已混 CS_BG,无白边。 */
+    pokedex_layout_build(&s_lay);
+
+    /* 早期绿色电子屏:整机暗墨绿底,荧光绿字;
+       左列身份(编号/名字/3 字母属性),右上 96px 精灵井,
+       中部身高体重,下部概述,底栏见过计数与按键提示。 */
     s_scr = lv_obj_create(NULL);
     lv_obj_remove_flag(s_scr, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(s_scr, lv_color_hex(CS_BG), 0);
     lv_obj_set_style_border_width(s_scr, 0, 0);
     lv_obj_set_style_pad_all(s_scr, 0, 0);
 
-    /* 标题条:更暗的绿 + 亮绿细框线,荧光绿字 */
-    flag_block(s_scr, 0, 0, 240, 22, CS_BG_DK, 0);
-    flag_block(s_scr, 0, 22, 240, 2, CS_FRAME, 0);
-    lv_obj_t *heading = lv_label_create(s_scr);
-    lv_obj_set_style_text_font(heading, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(heading, lv_color_hex(CS_TEXT), 0);
-    lv_obj_set_pos(heading, 10, 4);
+    flag_block(s_scr, s_lay.header, CS_BG_DK, 0);
+    flag_block(s_scr, s_lay.header_rule, CS_FRAME, 0);
+
+    lv_obj_t *heading = label_at(s_scr, s_lay.title, &lv_font_montserrat_14, CS_TEXT);
     lv_label_set_text(heading, "POKEDEX");
 
-    s_battery = lv_label_create(s_scr);
-    lv_obj_set_style_text_font(s_battery, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_battery, lv_color_hex(CS_TEXT), 0);
-    lv_obj_align(s_battery, LV_ALIGN_TOP_RIGHT, -8, 4);
+    s_progress = label_at(s_scr, s_lay.progress, &lv_font_montserrat_14, CS_BRIGHT);
+    lv_obj_set_style_text_align(s_progress, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(s_progress, "001/1025");
+
+    s_battery = label_at(s_scr, s_lay.battery, &lv_font_montserrat_14, CS_TEXT);
+    lv_obj_set_style_text_align(s_battery, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(s_battery, "--");
 
-    /* ---------- 电子屏显示区(亮绿细框 + 暗绿芯) ---------- */
-    flag_block(s_scr, 6, 26, 228, 130, CS_FRAME, 0);
-    flag_block(s_scr, 8, 28, 224, 126, CS_BG, 0);
-
-    /* 左列:编号 chip(荧光亮绿底、深绿字) */
-    flag_block(s_scr, 16, 34, 96, 18, CS_BRIGHT, 0);
-    s_no = lv_label_create(s_scr);
-    lv_obj_set_style_text_font(s_no, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_no, lv_color_hex(CS_BG_DK), 0);
-    lv_obj_set_pos(s_no, 20, 36);
-    lv_label_set_text(s_no, "NO.001");
-
-    /* 左列:名字 */
-    s_name = lv_label_create(s_scr);
-    lv_obj_set_style_text_font(s_name, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_name, lv_color_hex(CS_TEXT), 0);
-    lv_obj_set_pos(s_name, 14, 60);
-    lv_obj_set_width(s_name, 118);
-    lv_label_set_text(s_name, "---");
-
-    /* 左列:属性徽章 + 类型全名小字(GRASS / POISON) */
-    s_badge[0] = badge_create(s_scr, 0, 100, 40, 20, TYPE_COLORS[0], "-");
-    s_badge[1] = badge_create(s_scr, 0, 100, 40, 20, TYPE_COLORS[0], "-");
-    lv_obj_add_flag(s_badge[0], LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_badge[1], LV_OBJ_FLAG_HIDDEN);
-    s_types = lv_label_create(s_scr);
-    lv_obj_set_style_text_font(s_types, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_types, lv_color_hex(CS_DIM), 0);
-    lv_obj_set_pos(s_types, 16, 124);
-    lv_obj_set_width(s_types, 110);
-    lv_label_set_text(s_types, "");
-
-    /* 右上:精灵缩略图框(透明底混屏色,无白边) */
-    flag_block(s_scr, 140, 30, 90, 90, CS_FRAME, 0);
-    flag_block(s_scr, 142, 32, 86, 86, CS_BG, 0);
+    /* 右上精灵井 */
+    flag_block(s_scr, s_lay.sprite_frame, CS_FRAME, 0);
+    flag_block(s_scr, s_lay.sprite_inner, CS_BG, 0);
     s_sprite = lv_image_create(s_scr);
     lv_obj_add_flag(s_sprite, LV_OBJ_FLAG_HIDDEN);
-    s_sprite_hint = lv_label_create(s_scr);
-    lv_obj_set_style_text_font(s_sprite_hint, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_sprite_hint, lv_color_hex(CS_DIM), 0);
-    lv_obj_set_pos(s_sprite_hint, 151, 70);
-    lv_obj_set_width(s_sprite_hint, 68);
+    s_sprite_hint = label_at(s_scr, s_lay.sprite, &lv_font_montserrat_14, CS_DIM);
     lv_obj_set_style_text_align(s_sprite_hint, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(s_sprite_hint, "NO IMAGE");
 
-    /* ---------- 身高体重条(荧光亮绿底) ---------- */
-    flag_block(s_scr, 10, 162, 220, 20, CS_BRIGHT, 0);
-    s_htwt = lv_label_create(s_scr);
-    lv_obj_set_style_text_font(s_htwt, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_htwt, lv_color_hex(CS_BG_DK), 0);
-    lv_obj_set_pos(s_htwt, 14, 165);
-    lv_obj_set_width(s_htwt, 212);
-    lv_obj_set_style_text_align(s_htwt, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(s_htwt, "HT -.- m   WT -.- kg");
+    /* 左列:编号 chip */
+    flag_block(s_scr, s_lay.number_chip, CS_BRIGHT, 0);
+    s_no = label_at(s_scr, s_lay.number, &lv_font_montserrat_14, CS_BG_DK);
+    lv_label_set_text(s_no, "NO.001");
 
-    /* ---------- 概述面板(DEX ENTRY) ---------- */
-    flag_block(s_scr, 10, 188, 220, 72, CS_FRAME, 0);
-    flag_block(s_scr, 12, 190, 216, 68, CS_BG, 0);
-    lv_obj_t *dexl = lv_label_create(s_scr);
-    lv_obj_set_style_text_font(dexl, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(dexl, lv_color_hex(CS_DIM), 0);
-    lv_obj_set_pos(dexl, 18, 194);
-    lv_label_set_text(dexl, "DEX ENTRY");
-    s_desc = lv_label_create(s_scr);
-    lv_obj_set_style_text_font(s_desc, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_desc, lv_color_hex(CS_TEXT), 0);
-    lv_obj_set_pos(s_desc, 18, 209);
-    lv_obj_set_width(s_desc, 204);
+    s_name = label_at(s_scr, s_lay.name, &lv_font_montserrat_20, CS_TEXT);
+    lv_label_set_long_mode(s_name, LV_LABEL_LONG_CLIP);
+    lv_label_set_text(s_name, "---");
+
+    s_badge[0] = badge_create(s_scr, s_lay.badge[0], TYPE_COLORS[0]);
+    s_badge[1] = badge_create(s_scr, s_lay.badge[1], TYPE_COLORS[0]);
+    lv_obj_add_flag(s_badge[0], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_badge[1], LV_OBJ_FLAG_HIDDEN);
+
+    flag_block(s_scr, s_lay.stats, CS_BRIGHT, 0);
+    s_htwt = label_at(s_scr, s_lay.stats_text, &lv_font_montserrat_14, CS_BG_DK);
+    lv_obj_set_style_text_align(s_htwt, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(s_htwt, "HT -.- m    WT -.- kg");
+
+    flag_block(s_scr, s_lay.flavor_frame, CS_FRAME, 0);
+    flag_block(s_scr, s_lay.flavor_inner, CS_BG_DK, 0);
+    s_desc = label_at(s_scr, s_lay.flavor_text, &lv_font_montserrat_14, CS_TEXT);
     lv_label_set_long_mode(s_desc, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_desc, "");
 
-    /* ---------- 底部状态 / 收集计数 / 操作提示 ---------- */
-    s_status = lv_label_create(s_scr);
-    lv_obj_set_style_text_font(s_status, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_status, lv_color_hex(CS_TEXT), 0);
-    lv_obj_set_pos(s_status, 4, 264);
-    lv_obj_set_width(s_status, 232);
-    lv_obj_set_style_text_align(s_status, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(s_status, "OFFLINE DEX");
+    lv_obj_t *seen_chip = flag_block(s_scr, s_lay.tally_seen, CS_BG_DK, 0);
+    s_tally_seen = lv_label_create(seen_chip);
+    lv_obj_set_style_text_font(s_tally_seen, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_tally_seen, lv_color_hex(CS_TEXT), 0);
+    lv_obj_center(s_tally_seen);
+    lv_label_set_text(s_tally_seen, "0 SEEN");
 
-    s_count = lv_label_create(s_scr);
-    lv_obj_set_style_text_font(s_count, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_count, lv_color_hex(CS_TEXT), 0);
-    lv_obj_set_pos(s_count, 4, 282);
-    lv_obj_set_width(s_count, 232);
-    lv_obj_set_style_text_align(s_count, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(s_count, "CAUGHT 0/151   SEEN 0/151");
-
-    lv_obj_t *hint = lv_label_create(s_scr);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(hint, lv_color_hex(CS_DIM), 0);
-    lv_obj_set_pos(hint, 4, 302);
-    lv_obj_set_width(hint, 232);
+    lv_obj_t *hint = label_at(s_scr, s_lay.hint, &lv_font_montserrat_14, CS_DIM);
     lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(hint, "UP/DOWN BROWSE   OK CATCH");
+    lv_label_set_text(hint, "OK CRY   UP/DN 1/10/GEN");
 
     s_idle_sec = 0;
     s_bat_timer = lv_timer_create(bat_tick, 2000, NULL);
@@ -523,12 +455,13 @@ void demo_pokedex_enter(void)
     lv_screen_load(s_scr);
 
     s_exit = false;
-    ui_update_badges();
+    ui_update_tally();
     goto_id(s_state.last_id);
 }
 
 void demo_pokedex_exit(void)
 {
+    pokedex_cry_play_release();
     if (s_worker) xTaskNotifyGive(s_worker);
 
     s_exit = true;
@@ -546,12 +479,11 @@ void demo_pokedex_exit(void)
     s_no = NULL;
     s_badge[0] = NULL;
     s_badge[1] = NULL;
-    s_types = NULL;
     s_htwt = NULL;
     s_desc = NULL;
-    s_status = NULL;
-    s_count = NULL;
+    s_tally_seen = NULL;
     s_battery = NULL;
+    s_progress = NULL;
 
     /* worker 会把未落盘的改动持久化。 */
 }

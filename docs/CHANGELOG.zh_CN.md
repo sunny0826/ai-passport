@@ -6,17 +6,29 @@
 
 ## Unreleased
 
-- 新增纯离线宝可梦图鉴页面（`demo_pokedex.c`，菜单 “Pokédex”）：第 1 世代
-  1..151 号全部内嵌固件——基础数据、英文图鉴描述与 48×48 像素精灵图
+- 离线图鉴从第 1 世代（151）扩到全国图鉴第 I–IX 世代（`1..1025`）：基础数据、
+  英文概述与 48×48 精灵仍内嵌应用分区。见过/上次编号 NVS 升到 blob v2（272 字节、
+  130 字节位图），仍能迁入 v1 的 52 字节存档以免丢失已有记录。UP/DOWN 单击翻 1、
+  双击跳 10、长按跳世代。属性芯片包含恶（`DRK`）。
+  `tools/gen_pokedex_static.py` 缓存 PokeAPI 下载，并写入物种名（不用默认形态后缀）。
+- 图鉴 OK 单击改为播放当前叫声（Opus 8 kbps / 16 kHz，长度前缀包，存放在
+  `cryfs@0x35A000` 数据分区）。去掉 CAUGHT/WILD 芯片；NVS 仍保存见过与上次查看。
+  叫声来自 PokeAPI latest OGG，由 `tools/gen_pokedex_cries.py` 转码。含 `cryfs`
+  的合并镜像会跨过 `cardid`，已写身份的设备不得从 `0x0` 整包直刷。
+- 新增纯离线宝可梦图鉴页面（`demo_pokedex.c`，菜单 “Pokédex”）：全国图鉴
+  数据内嵌固件——基础数据、英文图鉴描述与 48×48 像素精灵图
   （raw-deflate 压缩，由 `tools/gen_pokedex_static.py` 从
-  [PokeAPI](https://pokeapi.co/) 生成）。UP/DOWN 翻阅，OK 标记“已捕捉”，
-  捕捉/见过状态与上次查看编号保存到 NVS，掉电不丢失。界面为绿色电子图鉴屏，
+  [PokeAPI](https://pokeapi.co/) 生成）。UP/DOWN 翻阅，OK 播放叫声，
+  见过状态与上次查看编号保存到 NVS，掉电不丢失。界面为绿色电子图鉴屏，
   背景色（#244238）与薄荷绿高亮取自参考站点 `pokedex.guoxudong.io` 打开图鉴
-  后的配色；精灵透明像素按该背景预混合，无白色边缘；单屏呈现精灵缩略图、
-  编号/名字/属性徽章、身高体重与概述文本。Wi-Fi/HTTPS 抓取、流式 JSON
+  后的配色；精灵透明像素按该背景预混合，无白色边缘。240×320 布局由可宿主
+  测试的几何模块（`pokedex_layout`）给出：右上 96×96（2 倍）精灵井，左列
+  编号/名字/三字母属性芯片，中部身高体重，更大的概述
+  面板，底栏见过计数与按键提示。长属性名不再与精灵重叠，电量百分比在深色
+  顶栏用浅色字，原先溢出屏幕的三行底栏已去掉。Wi-Fi/HTTPS 抓取、流式 JSON
   （`pokedex_stream`/miniz）与 Pokédex menuconfig 选项已全部移除；
   JSON/流模块及其宿主测试仅保留作参考。宿主机测试覆盖状态序列化黄金向量、
-  精灵图混合/解压、JSON 提取与静态图鉴表。
+  精灵图混合/解压、JSON 提取、静态图鉴表，以及布局边界/重叠/缩写契约。
 - 图鉴页面 60 秒无按键自动把背光降到 25%，任意按键恢复 100%。
 - actionlint 安装脚本改为优先 `shasum`（macOS 自带 BSD `sha256sum` 不支持 GNU
   `--check`），保证 macOS 上 `validate.sh --static` 可运行。

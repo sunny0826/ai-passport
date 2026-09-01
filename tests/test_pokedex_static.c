@@ -39,8 +39,8 @@ static uint8_t *load_blob(size_t *len)
 
 static void test_dex_table(void)
 {
-    /* 1..151 连续且拿到名字/身高体重;唯一种类 NONE 只允许在第二槽。 */
-    for (uint32_t id = 1; id <= 151; id++) {
+    /* 1..1025 连续且拿到名字/身高体重;唯一种类 NONE 只允许在第二槽。 */
+    for (uint32_t id = 1; id <= POKEDEX_DEX_LAST; id++) {
         const pokedex_static_entry_t *e = &pokedex_static_dex[id];
         CHECK(e->id == id);
         CHECK(e->name[0] != '\0');
@@ -68,6 +68,14 @@ static void test_dex_table(void)
     CHECK(pokedex_static_dex[122].type0 == POKEDEX_STATIC_TYPE_PSYCHIC);
     CHECK(pokedex_static_dex[122].type1 == POKEDEX_STATIC_TYPE_FAIRY);
     CHECK(strcmp(pokedex_static_dex[151].name, "mew") == 0);
+    CHECK(pokedex_static_dex[197].type0 == POKEDEX_STATIC_TYPE_DARK); /* umbreon */
+    CHECK(strcmp(pokedex_static_dex[252].name, "treecko") == 0);
+    CHECK(strcmp(pokedex_static_dex[387].name, "turtwig") == 0);
+    CHECK(strcmp(pokedex_static_dex[810].name, "grookey") == 0);
+    CHECK(pokedex_static_dex[1025].id == 1025);
+    CHECK(pokedex_static_dex[1025].name[0] != '\0');
+    CHECK(POKEDEX_STATIC_LAST == POKEDEX_DEX_LAST);
+    CHECK(strcmp(pokedex_static_dex[487].name, "giratina") == 0);
 }
 
 static void test_blob_decode(void)
@@ -79,8 +87,8 @@ static void test_blob_decode(void)
     static uint16_t px[POKEDEX_STATIC_SPRITE_BYTES / 2];
     uint32_t w = 0, h = 0;
 
-    /* 全部 151 只都能解出 48x48,且四角不是全零(存在内容)。 */
-    for (uint32_t id = 1; id <= 151; id++) {
+    /* 全部 1025 只都能解出 48x48,且不全为零(存在内容)。 */
+    for (uint32_t id = 1; id <= POKEDEX_DEX_LAST; id++) {
         CHECK(pokedex_sprite_static(blob, blob_len, id, px,
                                     sizeof(px) / 2, &w, &h));
         CHECK(w == POKEDEX_STATIC_DEX_W && h == POKEDEX_STATIC_DEX_H);
@@ -93,7 +101,8 @@ static void test_blob_decode(void)
 
     /* 越界/非法输入必须拒绝而不崩溃。 */
     CHECK(!pokedex_sprite_static(blob, blob_len, 0, px, sizeof(px) / 2, &w, &h));
-    CHECK(!pokedex_sprite_static(blob, blob_len, 152, px, sizeof(px) / 2, &w, &h));
+    CHECK(!pokedex_sprite_static(blob, blob_len, POKEDEX_DEX_LAST + 1, px,
+                                 sizeof(px) / 2, &w, &h));
     /* 只剩 TOC、数据区为空。 */
     CHECK(!pokedex_sprite_static(blob, POKEDEX_DEX_SIZE * 12u, 1, px,
                                  sizeof(px) / 2, &w, &h));
@@ -101,12 +110,12 @@ static void test_blob_decode(void)
 
     /* 逐只 CRC 只读校验:与生成器一致即 blob 未被静默破坏(记录基线)。 */
     uint32_t crc = 0;
-    for (uint32_t id = 1; id <= 151; id += 10) {
+    for (uint32_t id = 1; id <= POKEDEX_DEX_LAST; id += 50) {
         if (pokedex_sprite_static(blob, blob_len, id, px, sizeof(px) / 2, &w, &h)) {
             crc ^= lodepng_crc32((const unsigned char *)px, w * h * 2);
         }
     }
-    printf("  sprite CRC 抽样(隔 10 只): %08x\n", (unsigned)crc);
+    printf("  sprite CRC 抽样(隔 50 只): %08x\n", (unsigned)crc);
 
     free(blob);
 }

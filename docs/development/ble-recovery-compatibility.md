@@ -40,7 +40,10 @@ Derivative projects must preserve all of the following:
 
 Applications may add resource partitions, but the partitions must not overlap
 the protected regions. Required resource partitions must be included in the
-merged artifact rather than declared empty.
+merged artifact rather than declared empty. This firmware's `cryfs` partition
+at `0x35A000` (3.65 MB) holds national-dex cries and must appear in
+`FoloToy-AI-Passport-full.bin` with a `CRY1` payload. Because that image
+spans past `cardid`, never raw-flash it from `0x0` onto a provisioned device.
 
 ## Enforced validation
 

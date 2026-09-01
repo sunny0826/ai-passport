@@ -8,10 +8,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// 全国图鉴第 1 世代(1..151),与 PokeAPI 的 pokemon/{id} 一一对应。
+// 全国图鉴第 I–IX 世代(1..1025),与 PokeAPI 的 pokemon-species/{id} 一一对应。
 #define POKEDEX_DEX_FIRST  1u
-#define POKEDEX_DEX_LAST   151u
-#define POKEDEX_DEX_SIZE   (POKEDEX_DEX_LAST - POKEDEX_DEX_FIRST + 1u) /* 151 */
+#define POKEDEX_DEX_LAST   1025u
+#define POKEDEX_DEX_SIZE   (POKEDEX_DEX_LAST - POKEDEX_DEX_FIRST + 1u) /* 1025 */
+#define POKEDEX_GEN_COUNT  9u
 
 // 精灵图显示上限:由 240x320 屏幕布局决定(见 demo_pokedex.c 的精灵面板)。
 #define POKEDEX_SPRITE_MAX_W       96u
@@ -20,17 +21,22 @@
 
 // 掉电保存的序列化 blob:定长、显式偏移、小端。改布局必须升版本号并
 // 同时更新 tests/test_pokedex_core.c 里的黄金向量。
-#define POKEDEX_STATE_BLOB_VERSION 1u
-#define POKEDEX_STATE_BLOB_SIZE    52u /* 4+4+20+20+4,无填充 */
-#define POKEDEX_STATE_MAGIC        0x50445831u /* "PDX1" */
+// v1(PDX1,52B,20 字节位图,仅 1..151)仍可反序列化并迁到 v2。
+#define POKEDEX_STATE_BLOB_VERSION 2u
+#define POKEDEX_BITMAP_BYTES       130u /* 4 字节对齐,覆盖 1025 个 id(需 129) */
+#define POKEDEX_STATE_BLOB_SIZE    272u /* 4+4+4+130+130,无填充 */
+#define POKEDEX_STATE_MAGIC        0x50445832u /* "PDX2" */
+#define POKEDEX_STATE_V1_MAGIC     0x50445831u /* "PDX1" */
+#define POKEDEX_STATE_V1_BLOB_SIZE 52u
+#define POKEDEX_STATE_V1_BITMAP    20u
 
-// 捕捉/见过位图:bit(id - 1)。20 字节足以覆盖 151 个 id。
+// 捕捉/见过位图:bit(id - 1)。130 字节覆盖 1025 个 id。
 typedef struct {
     uint32_t magic;   /* POKEDEX_STATE_MAGIC,校验 blob 是否有效 */
     uint32_t last_id; /* 上次查看的图鉴编号,进入页面时恢复 */
-    uint8_t  caught[20];
-    uint8_t  seen[20];
     uint32_t save_seq; /* 每次持久化 +1,仅排障用 */
+    uint8_t  caught[POKEDEX_BITMAP_BYTES];
+    uint8_t  seen[POKEDEX_BITMAP_BYTES];
 } pokedex_state_t;
 
 // static 断言由宿主机测试保证:sizeof(pokedex_state_t) == POKEDEX_STATE_BLOB_SIZE。
@@ -38,7 +44,7 @@ typedef struct {
 // 初始化空白图鉴(last_id = 1)。
 void pokedex_state_init(pokedex_state_t *st);
 
-// 图鉴编号是否在 1..151 范围内。
+// 图鉴编号是否在 1..1025 范围内。
 bool pokedex_id_in_range(uint32_t id);
 
 // 位图查询/修改。越界 id 一律按未捕捉/不存在处理,不写越界内存。
@@ -51,11 +57,18 @@ void pokedex_mark_seen(pokedex_state_t *st, uint32_t id);
 uint32_t pokedex_count_caught(const pokedex_state_t *st);
 uint32_t pokedex_count_seen(const pokedex_state_t *st);
 
-// 在 1..151 内以 delta 步进并回绕(UP=-1, DOWN=+1)。用于按键导航。
+// 在 1..1025 内以 delta 步进并回绕(UP=-1, DOWN=+1)。用于按键导航。
 uint32_t pokedex_step(uint32_t id, int32_t delta);
 
+// 世代:1..9 对应 I–IX;越界 id 返回 0。
+uint32_t pokedex_generation(uint32_t id);
+// 该世代全国图鉴起始编号;越界 id 返回 0。
+uint32_t pokedex_gen_first(uint32_t id);
+// 跳到相邻世代的第一只并回绕(长按 UP/DOWN)。dir<0 上一代,dir>0 下一代。
+uint32_t pokedex_step_gen(uint32_t id, int32_t dir);
+
 // 序列化/反序列化。serialize 保证写入 POKEDEX_STATE_BLOB_SIZE 字节;
-// deserialize 校验 magic 与长度,非法数据返回 false 且不改动 st。
+// deserialize 接受 v2(272B)或 v1(52B,迁到 v2);非法数据返回 false 且不改动 st。
 size_t pokedex_state_serialize(const pokedex_state_t *st, uint8_t *buf, size_t cap);
 bool pokedex_state_deserialize(pokedex_state_t *st, const uint8_t *buf, size_t len);
 

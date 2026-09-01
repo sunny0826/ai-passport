@@ -40,6 +40,7 @@ AI 应先完成以下检查：
 | Bluetooth LE | ESP32-C3 NimBLE peripheral | 应用页按需初始化 | 不可连接广播页 |
 | 低功耗 | ESP32-C3 light/deep sleep | RTC timer 唤醒 | 2 秒 light sleep 和 5 秒 deep sleep 模式 |
 | 日志 | USB Serial/JTAG | 原生 USB GPIO18/19 | 已配置 |
+| 叫声数据 | `cardid` 之后的 `cryfs` | `0x35A000`，3.65 MB | 全国图鉴 Opus 叫声 |
 
 ## 3. 引脚表与资源所有权
 
@@ -226,7 +227,7 @@ SOC 准确度取决于电芯与 profile 的匹配程度。本驱动给出的是�
 
 ## 10. Flash、控制台和资源预算
 
-当前产品与固件基线使用 8 MB Flash。`sdkconfig.defaults` 固定使用 8 MB Flash 镜像配置，并关闭 `CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE`（不按探测容量回写镜像头，便于 `idf.py merge-bin`）；`partitions.csv` 提供 24 KB NVS、4 KB PHY data、3 MB factory app、位于 `0x356000` 的保护 `cardid`，以及位于 `0x700000` 的永久 Recovery。这不是 ESP-IDF 双槽 OTA 布局；工厂预装 Recovery 负责 BLE 安装，且必须保持固定地址。开机持续按住上键/GPIO0 5 秒时，bootloader 会进入 Recovery。若实机探测结果不是 8 MB，则该设备不符合当前基线；修改项目默认值前应先确认板卡和 Flash 料号。
+当前产品与固件基线使用 8 MB Flash。`sdkconfig.defaults` 固定使用 8 MB Flash 镜像配置，并关闭 `CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE`（不按探测容量回写镜像头，便于 `idf.py merge-bin`）；`partitions.csv` 提供 24 KB NVS、4 KB PHY data、3 MB factory app、位于 `0x356000` 的保护 `cardid`、位于 `0x35A000` 的 `cryfs` 数据分区（3.65 MB，全国图鉴 Opus 叫声），以及位于 `0x700000` 的永久 Recovery。这不是 ESP-IDF 双槽 OTA 布局；工厂预装 Recovery 负责 BLE 安装，且必须保持固定地址。开机持续按住上键/GPIO0 5 秒时，bootloader 会进入 Recovery。若实机探测结果不是 8 MB，则该设备不符合当前基线；修改项目默认值前应先确认板卡和 Flash 料号。含 `cryfs` 的合并镜像会跨过 `cardid`，已写身份的设备不得从 `0x0` 整包直刷。
 
 不得擦除已写身份的设备，也不得移动或覆盖保护分区。社区固件既不包含单机身份，
 也不携带替换 Recovery 的数据。详见 [BLE 兼容契约](../development/ble-recovery-compatibility.zh_CN.md)。
@@ -239,6 +240,7 @@ SOC 准确度取决于电芯与 profile 的匹配程度。本驱动给出的是�
 - LCD DMA buffer 约 9.6 KB；
 - I2S DMA descriptor/frame buffer；
 - Audio demo 96 KB 录音堆；
+- 图鉴 Opus 叫声解码器堆；
 - Wi-Fi 驱动或 NimBLE host/controller（两个示例不同时常驻）；
 - 各 FreeRTOS 任务栈和最大连续空闲块。
 
@@ -423,6 +425,7 @@ idf.py flash monitor
 | LCD 序列/旋转/颜色 | 红绿蓝白黑色块、方向、边缘裁切、负片、字节序、背光 100/50/10% |
 | ADC/按键 | 松开和三键实测 mV、单击/双击/长按、不同电量下的裕量 |
 | codec/I2S | 1 kHz 音调频率/速度、录音非零且回放速度正确、格式切换、退出页面 |
+| 图鉴叫声 | OK 播放当前叫声；翻页打断播放；播放中退出安全；缺少 `cryfs` 时保持静音 |
 | 电池 | 合理 SOC 和 mV、无电量计时正确降级、断续 I2C 的错误恢复表现 |
 | Wi-Fi | 扫描总数和 SSID/RSSI 可见、OK 重扫描、反复进出后仍可扫描 |
 | Bluetooth LE | 手机看到 `FoloPassport`、OK 重启广播、退出后广播消失、反复进出无重启 |

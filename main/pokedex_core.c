@@ -6,11 +6,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define DECKSIZE_BYTES 20u /* (151 + 7) / 8 */
+#define DECKSIZE_BYTES POKEDEX_BITMAP_BYTES /* (1025 + 7) / 8 */
 
-_Static_assert(POKEDEX_DEX_SIZE == 151u, "dex size assumed 151");
+_Static_assert(POKEDEX_DEX_SIZE == 1025u, "dex size assumed 1025");
+_Static_assert(POKEDEX_BITMAP_BYTES >= ((POKEDEX_DEX_SIZE + 7u) / 8u),
+               "bitmap must cover every national-dex id");
 _Static_assert(sizeof(pokedex_state_t) == POKEDEX_STATE_BLOB_SIZE,
-               "state layout must stay 52 bytes");
+               "state layout must stay 272 bytes");
 
 // ============================================================================
 // 图鉴状态位图
@@ -92,8 +94,44 @@ uint32_t pokedex_step(uint32_t id, int32_t delta)
     return (uint32_t)next;
 }
 
+/* 全国图鉴世代边界(含):I 1-151, II 152-251, III 252-386, IV 387-493,
+   V 494-649, VI 650-721, VII 722-809, VIII 810-905, IX 906-1025。 */
+static const uint16_t GEN_LAST[POKEDEX_GEN_COUNT] = {
+    151, 251, 386, 493, 649, 721, 809, 905, 1025,
+};
+
+uint32_t pokedex_generation(uint32_t id)
+{
+    if (!pokedex_id_in_range(id)) return 0;
+    for (uint32_t g = 0; g < POKEDEX_GEN_COUNT; g++) {
+        if (id <= GEN_LAST[g]) return g + 1u;
+    }
+    return 0;
+}
+
+uint32_t pokedex_gen_first(uint32_t id)
+{
+    uint32_t g = pokedex_generation(id);
+    if (g == 0) return 0;
+    if (g == 1) return POKEDEX_DEX_FIRST;
+    return (uint32_t)GEN_LAST[g - 2u] + 1u;
+}
+
+uint32_t pokedex_step_gen(uint32_t id, int32_t dir)
+{
+    uint32_t g = pokedex_generation(id);
+    if (g == 0) g = 1;
+    if (dir == 0) return pokedex_gen_first(id ? id : POKEDEX_DEX_FIRST);
+    if (dir < 0) {
+        g = (g == 1u) ? POKEDEX_GEN_COUNT : (g - 1u);
+    } else {
+        g = (g == POKEDEX_GEN_COUNT) ? 1u : (g + 1u);
+    }
+    return (g == 1u) ? POKEDEX_DEX_FIRST : ((uint32_t)GEN_LAST[g - 2u] + 1u);
+}
+
 // ============================================================================
-// 序列化(定长 52 字节,显式小端布局)
+// 序列化(定长 272 字节 v2;仍可读 52 字节 v1)
 // ============================================================================
 
 size_t pokedex_state_serialize(const pokedex_state_t *st, uint8_t *buf, size_t cap)
@@ -106,38 +144,71 @@ size_t pokedex_state_serialize(const pokedex_state_t *st, uint8_t *buf, size_t c
     off += sizeof(st->magic);
     memcpy(buf + off, &st->last_id, sizeof(st->last_id));
     off += sizeof(st->last_id);
+    memcpy(buf + off, &st->save_seq, sizeof(st->save_seq));
+    off += sizeof(st->save_seq);
     memcpy(buf + off, st->caught, sizeof(st->caught));
     off += sizeof(st->caught);
     memcpy(buf + off, st->seen, sizeof(st->seen));
     off += sizeof(st->seen);
-    memcpy(buf + off, &st->save_seq, sizeof(st->save_seq));
-    off += sizeof(st->save_seq);
     return off; /* == POKEDEX_STATE_BLOB_SIZE */
 }
 
 bool pokedex_state_deserialize(pokedex_state_t *st, const uint8_t *buf, size_t len)
 {
-    if (!st || !buf || len < POKEDEX_STATE_BLOB_SIZE) return false;
+    uint32_t magic;
 
-    pokedex_state_t tmp;
-    size_t off = 0;
-    memcpy(&tmp.magic, buf + off, sizeof(tmp.magic));
-    off += sizeof(tmp.magic);
-    memcpy(&tmp.last_id, buf + off, sizeof(tmp.last_id));
-    off += sizeof(tmp.last_id);
-    memcpy(tmp.caught, buf + off, sizeof(tmp.caught));
-    off += sizeof(tmp.caught);
-    memcpy(tmp.seen, buf + off, sizeof(tmp.seen));
-    off += sizeof(tmp.seen);
-    memcpy(&tmp.save_seq, buf + off, sizeof(tmp.save_seq));
-    off += sizeof(tmp.save_seq);
-    (void)off;
+    if (!st || !buf || len < 4) return false;
+    memcpy(&magic, buf, sizeof(magic));
 
-    if (tmp.magic != POKEDEX_STATE_MAGIC) return false;
-    if (!pokedex_id_in_range(tmp.last_id)) return false;
+    if (magic == POKEDEX_STATE_MAGIC) {
+        pokedex_state_t tmp;
+        size_t off = 0;
 
-    *st = tmp;
-    return true;
+        if (len < POKEDEX_STATE_BLOB_SIZE) return false;
+        memcpy(&tmp.magic, buf + off, sizeof(tmp.magic));
+        off += sizeof(tmp.magic);
+        memcpy(&tmp.last_id, buf + off, sizeof(tmp.last_id));
+        off += sizeof(tmp.last_id);
+        memcpy(&tmp.save_seq, buf + off, sizeof(tmp.save_seq));
+        off += sizeof(tmp.save_seq);
+        memcpy(tmp.caught, buf + off, sizeof(tmp.caught));
+        off += sizeof(tmp.caught);
+        memcpy(tmp.seen, buf + off, sizeof(tmp.seen));
+        off += sizeof(tmp.seen);
+        (void)off;
+        if (!pokedex_id_in_range(tmp.last_id)) return false;
+        *st = tmp;
+        return true;
+    }
+
+    /* v1:20 字节位图只覆盖 1..151,迁入 v2 高位清零。 */
+    if (magic == POKEDEX_STATE_V1_MAGIC) {
+        pokedex_state_t tmp;
+        uint32_t last_id = 0, save_seq = 0;
+        uint8_t caught_v1[POKEDEX_STATE_V1_BITMAP];
+        uint8_t seen_v1[POKEDEX_STATE_V1_BITMAP];
+        size_t off = 4;
+
+        if (len < POKEDEX_STATE_V1_BLOB_SIZE) return false;
+        memcpy(&last_id, buf + off, 4);
+        off += 4;
+        memcpy(caught_v1, buf + off, POKEDEX_STATE_V1_BITMAP);
+        off += POKEDEX_STATE_V1_BITMAP;
+        memcpy(seen_v1, buf + off, POKEDEX_STATE_V1_BITMAP);
+        off += POKEDEX_STATE_V1_BITMAP;
+        memcpy(&save_seq, buf + off, 4);
+        if (last_id < POKEDEX_DEX_FIRST || last_id > 151u) return false;
+
+        pokedex_state_init(&tmp);
+        tmp.last_id = last_id;
+        tmp.save_seq = save_seq;
+        memcpy(tmp.caught, caught_v1, POKEDEX_STATE_V1_BITMAP);
+        memcpy(tmp.seen, seen_v1, POKEDEX_STATE_V1_BITMAP);
+        *st = tmp;
+        return true;
+    }
+
+    return false;
 }
 
 // ============================================================================

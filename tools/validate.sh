@@ -33,6 +33,10 @@ run_static_checks() {
         -o "${test_dir}/test_pokedex_core"
     "${test_dir}/test_pokedex_core"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_pokedex_layout.c main/pokedex_layout.c main/pokedex_core.c \
+        -o "${test_dir}/test_pokedex_layout"
+    "${test_dir}/test_pokedex_layout"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_pokedex_sprite.c main/pokedex_sprite.c main/pokedex_core.c \
         main/vendor/lodepng.c \
         -o "${test_dir}/test_pokedex_sprite"
@@ -51,6 +55,11 @@ run_static_checks() {
         main/pokedex_static.c main/vendor/lodepng.c \
         -o "${test_dir}/test_pokedex_static"
     "${test_dir}/test_pokedex_static"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_pokedex_cry.c main/pokedex_cry.c main/pokedex_core.c \
+        -o "${test_dir}/test_pokedex_cry"
+    "${test_dir}/test_pokedex_cry"
+    python3 tests/test_pokedex_cries_bin.py
     python3 tests/test_verify_firmware.py
     rm -rf "${test_dir}"
     echo "Host tests: PASS"

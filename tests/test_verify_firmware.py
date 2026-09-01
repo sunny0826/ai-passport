@@ -27,6 +27,7 @@ def sample_table() -> bytes:
         (1, 1, 0xF000, 0x1000, "phy_init"),
         (0, 0, 0x10000, 0x300000, "factory"),
         (1, 2, 0x356000, 0x4000, "cardid"),
+        (1, 0x40, 0x35A000, 0x3A6000, "cryfs"),
         (0, 0x20, 0x700000, 0x100000, "recovery"),
     )
     raw = bytearray(b"\xff" * VERIFY.PARTITION_TABLE_SIZE)
@@ -52,7 +53,8 @@ class PartitionParserTest(unittest.TestCase):
     def test_parses_protected_layout_and_md5(self) -> None:
         partitions, found_md5 = VERIFY.parse_partition_table(sample_table())
         self.assertTrue(found_md5)
-        self.assertEqual(partitions[-2].label, "cardid")
+        labels = [item.label for item in partitions]
+        self.assertEqual(labels[-3:], ["cardid", "cryfs", "recovery"])
         self.assertEqual(partitions[-1].offset, VERIFY.RECOVERY_OFFSET)
 
     def test_rejects_bad_md5(self) -> None:

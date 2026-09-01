@@ -38,6 +38,7 @@ The target is the ESP32-C3 FoloToy AI Passport with ESP-IDF 5.5.3. It has 8 MB F
 | Bluetooth LE | NimBLE peripheral | initialized by the demo | Non-connectable advertising page |
 | Low power | light/deep sleep | RTC timer wake | 2 s light and 5 s deep-sleep modes |
 | Console | USB Serial/JTAG | native USB GPIO18/19 | Configured |
+| Cry data | `cryfs` after `cardid` | `0x35A000`, 3.65 MB | National-dex Opus cries |
 
 ## 3. Pin map and resource ownership
 
@@ -167,7 +168,7 @@ Accurate production SOC requires the cell parameters, CW2017 datasheet/vendor pr
 
 ## 10. Flash, console, and memory
 
-The current product and firmware baseline uses 8 MB Flash. `sdkconfig.defaults` fixes the image to 8 MB and disables automatic flash-size header rewriting. `partitions.csv` defines 24 KB NVS, 4 KB PHY data, one 3 MB factory application, protected `cardid` at `0x356000`, and permanent Recovery at `0x700000`. This is not an ESP-IDF dual-slot OTA layout: the factory-installed Recovery performs BLE installation and must remain at its fixed address. The bootloader enters it when UP/GPIO0 is held for five seconds. A detected non-8-MB device does not match this baseline; identify the board and flash part before changing the project default.
+The current product and firmware baseline uses 8 MB Flash. `sdkconfig.defaults` fixes the image to 8 MB and disables automatic flash-size header rewriting. `partitions.csv` defines 24 KB NVS, 4 KB PHY data, one 3 MB factory application, protected `cardid` at `0x356000`, a `cryfs` data partition at `0x35A000` (3.65 MB, national-dex Opus cries), and permanent Recovery at `0x700000`. This is not an ESP-IDF dual-slot OTA layout: the factory-installed Recovery performs BLE installation and must remain at its fixed address. The bootloader enters it when UP/GPIO0 is held for five seconds. A detected non-8-MB device does not match this baseline; identify the board and flash part before changing the project default. A merged image that includes `cryfs` spans past `cardid`; do not raw-flash that file from `0x0` onto a provisioned device.
 
 Do not erase a provisioned device or move/overlap the protected partitions.
 Community firmware contains neither device identity nor a replacement Recovery
@@ -175,7 +176,7 @@ payload. See the [BLE compatibility contract](../development/ble-recovery-compat
 
 The console is USB Serial/JTAG. Do not switch to the UART0 default output without resolving its GPIO21 conflict with the backlight.
 
-Review at least the 24 KB LVGL pool, 9.6 KB LCD DMA buffer, I2S DMA, 96 KB demo recording, radio stacks, task stacks, total free heap, and largest contiguous block when adding assets, TLS/networking, audio buffers, or double buffering.
+Review at least the 24 KB LVGL pool, 9.6 KB LCD DMA buffer, I2S DMA, 96 KB demo recording, Opus cry decoder heap, radio stacks, task stacks, total free heap, and largest contiguous block when adding assets, TLS/networking, audio buffers, or double buffering.
 
 ## 11. Adding features
 
@@ -232,6 +233,7 @@ General board acceptance:
 | LCD | color blocks, orientation, clipping, inversion, byte order, backlight levels |
 | ADC/buttons | released and pressed mV, click/double/long events, margin across battery levels |
 | Codec/I2S | 1 kHz tone, non-zero recording, correct playback speed, format changes, page exit |
+| Pokédex cries | OK plays current cry; browse interrupts playback; exit while playing is safe; missing `cryfs` stays silent |
 | Battery | plausible SOC/mV, graceful missing-device behavior, intermittent-I2C recovery |
 | Wi-Fi | visible scan count/SSID/RSSI, rescan, repeated entry/exit |
 | Bluetooth LE | phone sees `FoloPassport`, restart advertising, advertising stops on exit, repeated entry/exit |

@@ -9,11 +9,11 @@ the [environment bootstrap](environment-setup.md) first.
 
 > Prefer `./tools/validate.sh --firmware` for firmware builds and flash its
 > verified `build/FoloToy-AI-Passport-full.bin` at offset `0x0` only when the
-> target is blank or the merged byte range ends before protected `cardid`.
-> On a provisioned device, prefer mini-program install or segmented
-> `idf.py flash`. Treat
-> `idf.py build` and `idf.py flash` as incremental development commands, not the
-> default delivery path.
+> target is blank. This image includes `cryfs` after `cardid`, so a provisioned
+> device must use mini-program install or segmented `idf.py flash` (bootloader,
+> table, app, and `cryfs` at `0x35A000`) — never a raw `0x0` write.
+> Treat `idf.py build` and `idf.py flash` as incremental development commands,
+> not the default delivery path.
 
 ```bash
 source <path-to-esp-idf-v5.5.3>/export.sh
