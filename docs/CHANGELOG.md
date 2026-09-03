@@ -6,6 +6,15 @@
 
 ## Unreleased
 
+- Added the `FAP_SCREENSHOT_V1` serial screen-capture protocol
+  (`main/screenshot.c`): a low-priority background task watches the USB
+  console for the publisher command and streams the active screen as a
+  little-endian RGB565 frame (240×320 in 16 top-down 20-row bands through a
+  temporary LVGL flush wrapper, driven while the LVGL lock is held). The
+  command is observational only — it never reboots, flashes, changes settings,
+  or outputs credentials. Log output is muted and VFS TX line endings are
+  switched to LF for the binary stream, then restored. The AI Passport
+  community publisher requires this protocol for its screen-capture evidence.
 - Expanded the offline Pokédex from generation 1 (151) to the national
   dex through generation IX (`1..1025`): stats, English flavor text, and
   48×48 sprites stay embedded in the application image. NVS seen/last-id
