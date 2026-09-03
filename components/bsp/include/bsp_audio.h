@@ -22,3 +22,9 @@ esp_err_t bsp_audio_read(void *pcm, size_t bytes);
 
 // 输出音量 0..100(%)。
 void bsp_audio_set_volume(uint8_t percent);
+
+// 麦克风模拟增益 0..100(%)。100% 对应产品基线的 30 dB,线性映射到 0..30 dB。
+// 任意时刻可调:codec 未打开时只记录,open 后自动按当前值重新应用;
+// 超过 100 会被收敛到 100。掉电保存由应用层负责(本组件不碰 NVS)。
+void bsp_audio_set_mic_gain(uint8_t percent);
+uint8_t bsp_audio_get_mic_gain(void);

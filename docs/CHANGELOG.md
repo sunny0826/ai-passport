@@ -6,6 +6,29 @@
 
 ## Unreleased
 
+- Added `tools/ble_mic_client.html`, a zero-dependency single-file Web Bluetooth
+  client for the Mic page: open it in Chrome/Edge, connect to `FoloPassport-Mic`,
+  and it live-plays the Audio Data notification stream (16 kHz/16-bit/mono PCM),
+  shows a level meter and byte counter, records the stream to a downloadable
+  WAV, and reads/writes the Mic Gain characteristic so the computer can adjust
+  the device's microphone gain remotely.
+
+- Added a Mic page to the demo menu: hold OK to talk (push-to-talk) with a live
+  pixel-style talking animation driven by the actual microphone level, tap OK to
+  play back the last recording, and UP/DOWN clicks to adjust microphone gain in
+  10% steps. The gain is persisted in NVS (`mic_demo/gain_pct`) and survives
+  power loss; it is exposed over a new `bsp_audio_set_mic_gain()` BSP API
+  (0–100% mapped linearly to the product-baseline 0–30 dB range). The page also
+  advertises as a connectable NimBLE peripheral ("FoloPassport-Mic") with a GATT
+  service exposing Audio Data (notify, live 16 kHz/16-bit/mono PCM chunks while
+  talking), Mic Gain (read/write), and Audio Info (read) characteristics, so a
+  computer or phone with a generic BLE tool can receive the stream and adjust
+  gain. Buttons gained a `BSP_BTN_RELEASE` event (needed as the end signal for
+  hold-to-talk), pages may now redefine the OK long-press via
+  `demo_entry_t::ok_long_back`, and UP/DOWN long-press exits the Mic page. The
+  pure state machine, level smoothing, gain stepping, and the bounded 4-second
+  recording ring buffer are host-tested in `tests/test_mic_model.c`.
+
 - Added the supplied 80-byte CW2017 profile for the specified 520 mAh cell, including content/update-flag checks, verified writes, the required restart sequence, and bounded SOC-readiness polling.
 
 - Reorganized the documentation by function area with a dual entry point: the root `AGENTS.md` is now a thin router (hard constraints + task routing only) and the detailed AI workflow lives in `docs/development/ai-guide.md`; `agent-guide.md` was folded in. `docs/development/` gained a second level (`engineering/`, `ci/`, `release/`), and the `plays/` application archive and `experiences/` moved into a `docs/reference/` area with a dedicated README. Removed `docs/software-design/` (empty scaffold); folded the three `assets/{fonts,images,music}/README` leaves into the `assets/` README; flattened the six `project-completion` sub-documents into a single file; and unified each directory to a single README, eliminating every `INDEX` file and a duplicated experience index. All cross-references and bibliographic links were updated; no content was dropped.

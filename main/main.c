@@ -18,16 +18,25 @@
 
 static const char *TAG = "main";
 
+// 页面通过 demo_request_exit() 请求返回菜单;在按键回调返回后统一处理,
+// 保证回调期间页面状态一致。
+static volatile bool s_exit_requested;
+
 static const demo_entry_t DEMOS[] = {
-    { "Display", demo_display_enter, demo_display_exit, demo_display_key },
-    { "Button",  demo_button_enter,  demo_button_exit,  demo_button_key  },
-    { "Audio",   demo_audio_enter,   demo_audio_exit,   demo_audio_key   },
-    { "Battery", demo_battery_enter, demo_battery_exit, demo_battery_key },
-    { "Wi-Fi",   demo_wifi_enter,    demo_wifi_exit,    demo_wifi_key    },
-    { "BLE",     demo_ble_enter,     demo_ble_exit,     demo_ble_key     },
-    { "Low Power", demo_low_power_enter, demo_low_power_exit, demo_low_power_key },
+    { "Display",   demo_display_enter,   demo_display_exit,   demo_display_key,   true },
+    { "Button",    demo_button_enter,    demo_button_exit,    demo_button_key,    true },
+    { "Audio",     demo_audio_enter,     demo_audio_exit,     demo_audio_key,     true },
+    { "Battery",   demo_battery_enter,   demo_battery_exit,   demo_battery_key,   true },
+    { "Wi-Fi",     demo_wifi_enter,      demo_wifi_exit,      demo_wifi_key,      true },
+    { "BLE",       demo_ble_enter,       demo_ble_exit,       demo_ble_key,       true },
+    { "Low Power", demo_low_power_enter, demo_low_power_exit, demo_low_power_key, true },
+    { "Mic",       demo_mic_enter,       demo_mic_exit,       demo_mic_key,       false },
 };
 #define DEMO_COUNT (sizeof(DEMOS) / sizeof(DEMOS[0]))
+
+void demo_request_exit(void) {
+    s_exit_requested = true;
+}
 
 // 各外设初始化结果:失败的项在菜单里标 [FAIL] 且不允许进入。
 static bool s_ok[DEMO_COUNT];
@@ -80,11 +89,17 @@ static void on_key(bsp_btn_t btn, bsp_btn_ev_t ev, void *user) {
     if (!bsp_lvgl_lock(500)) return;
 
     if (s_active >= 0) {
-        if (btn == BSP_BTN_OK && ev == BSP_BTN_LONG) {     // 统一返回
+        if (btn == BSP_BTN_OK && ev == BSP_BTN_LONG && DEMOS[s_active].ok_long_back) {
+            // 统一返回(页面未重定义 OK 长按时)
             DEMOS[s_active].exit();
             enter_menu();
         } else {
             DEMOS[s_active].key(btn, ev);
+            if (s_exit_requested) {
+                s_exit_requested = false;
+                DEMOS[s_active].exit();
+                enter_menu();
+            }
         }
     } else if (ev == BSP_BTN_CLICK) {
         if (btn == BSP_BTN_UP)   { s_sel = (s_sel + DEMO_COUNT - 1) % DEMO_COUNT; menu_refresh(); }
@@ -131,6 +146,7 @@ void app_main(void) {
     s_ok[4] = true;                                    // 页面内按需初始化并显示错误
     s_ok[5] = true;
     s_ok[6] = true;
+    s_ok[7] = s_ok[2];                                 // Mic 依赖音频(录音+回放)
 
     if (bsp_lvgl_lock(1000)) { enter_menu(); bsp_lvgl_unlock(); }
 

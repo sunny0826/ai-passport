@@ -6,6 +6,10 @@
 
 ## Unreleased
 
+- 新增 `tools/ble_mic_client.html`：零依赖的单文件 Web Bluetooth 收流客户端，配合 Mic 页使用。用 Chrome/Edge 打开后连接 `FoloPassport-Mic`，即可实时播放 Audio Data 通知推送的 16 kHz/16-bit/单声道 PCM，显示电平条与字节计数，一键把收流录制成可下载的 WAV，并读取/写入 Mic Gain 特征，从电脑端远程调节设备麦克风增益。
+
+- 演示菜单新增麦克风（Mic）页：按住 OK 说话（松开结束，屏幕上的像素动画随真实麦克风电平变化），单击 OK 回放上一段录音，上/下键单击以 10% 步进调节麦克风增益。增益保存在 NVS（`mic_demo/gain_pct`），掉电不丢失；并通过新的 BSP API `bsp_audio_set_mic_gain()`（0–100% 线性映射到产品基线 0–30 dB）生效。页面同时以可连接的 NimBLE 外设广播（设备名 `FoloPassport-Mic`），提供 GATT 服务：Audio Data（notify，说话时实时推送 16 kHz/16-bit/单声道 PCM 分块）、Mic Gain（读/写）、Audio Info（读），电脑或手机用通用 BLE 工具即可收流并调节增益。按键新增 `BSP_BTN_RELEASE` 事件（作为按住说话的结束信号）；页面可通过 `demo_entry_t::ok_long_back` 重定义 OK 长按行为；麦克风页中长按上/下返回菜单。纯状态机、电平平滑、增益步进与有界的 4 秒录音环形缓冲都在 `tests/test_mic_model.c` 中做宿主机测试。
+
 - 加入厂家为优特利 520mAh 电芯生成的 80 字节 CW2017 profile，并实现内容与更新标志检查、写入后校验、规定的重启时序以及有上限的 SOC 就绪等待。
 
 - 按功能域整理文档并采用双入口：根目录 `AGENTS.md` 变为薄路由（只保留硬约束与任务路由），详细的 AI 开发工作流下沉到 `docs/development/ai-guide.md`，`agent-guide.md` 并入其中。为 `docs/development/` 增加二级分区（`engineering/`、`ci/`、`release/`），把 `plays/` 应用档案与 `experiences/` 移入带专属 README 的 `docs/reference/` 参考区；删除 `docs/software-design/`（空脚手架）；把 `assets/{fonts,images,music}/README` 三个叶子 README 并入 `assets/` README；把 `project-completion` 的六个子文档压平为单文件；并把每个目录统一为单一 README，消除所有 `INDEX` 文件与一处重复经验索引。所有交叉引用与文献链接已更新；未丢弃任何内容。

@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>FoloPassport-Mic BLE 收流客户端</title>
+<style>
+  /* 像素/Omarchy 风格:等宽字、墨线边框、硬阴影、纸底色 */
+  :root { --ink:#17202a; --paper:#f4f4ea; --sky:#1689e8; --grass:#82be2d;
+          --yellow:#ffd928; --orange:#ffb23e; --red:#e43b2f; --track:#e2e2d6; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--sky); font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+         color:var(--ink); min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .wrap { width:520px; max-width:100%; }
+  .plate { background:var(--paper); border:3px solid var(--ink); box-shadow:6px 6px 0 var(--ink);
+           padding:14px 16px; margin-bottom:16px; }
+  h1 { font-size:18px; letter-spacing:1px; margin-bottom:2px; }
+  .sub { font-size:12px; color:#2e5a73; }
+  button { font:inherit; border:3px solid var(--ink); background:var(--paper); color:var(--ink);
+           padding:8px 14px; cursor:pointer; box-shadow:3px 3px 0 var(--ink); }
+  button:active { transform:translate(2px,2px); box-shadow:1px 1px 0 var(--ink); }
+  button.primary { background:var(--grass); }
+  button.rec { background:var(--red); color:#fff; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .row { display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap; }
+  .stat { font-size:12px; color:#2e5a73; }
+  .meter { display:flex; gap:3px; margin-top:8px; }
+  .meter i { width:22px; height:14px; background:var(--track); border:2px solid var(--ink); }
+  .meter i.on1 { background:var(--grass); } .meter i.on2 { background:var(--yellow); } .meter i.on3 { background:var(--red); }
+  input[type=range] { flex:1; accent-color:var(--grass); }
+  ol { font-size:12.5px; line-height:1.8; padding-left:20px; }
+  .warn { color:#7a2020; font-size:12px; margin-top:6px; }
+  .dl a { font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="plate">
+    <h1>FoloPassport-Mic 收流客户端</h1>
+    <div class="sub">BLE GATT · Audio Data notify · 16kHz/16bit/mono PCM</div>
+    <div class="row">
+      <button id="connect" class="primary">连接设备</button>
+      <button id="disconnect" disabled>断开</button>
+      <span id="status" class="stat">未连接</span>
+    </div>
+    <div class="meter" id="meter"></div>
+    <div class="row"><span id="bytes" class="stat">收到 0 字节</span></div>
+  </div>
+
+  <div class="plate">
+    <h1 style="font-size:14px">麦克风增益(写回设备)</h1>
+    <div class="row">
+      <input type="range" id="gain" min="0" max="100" step="10" value="100" disabled>
+      <span id="gainVal" class="stat" style="width:44px;text-align:right">100%</span>
+      <button id="applyGain" disabled>写入</button>
+    </div>
+  </div>
+
+  <div class="plate">
+    <h1 style="font-size:14px">收流录制</h1>
+    <div class="row">
+      <button id="rec" class="rec" disabled>开始录制</button>
+      <button id="stopRec" disabled>停止并保存 WAV</button>
+      <span id="recStat" class="stat">未录制</span>
+    </div>
+    <div class="row dl" id="dlRow"></div>
+  </div>
+
+  <div class="plate">
+    <h1 style="font-size:14px">使用步骤</h1>
+    <ol>
+      <li>设备进入 <b>Mic</b> 页(屏幕显示 BLE: ADVERTISING)。</li>
+      <li>点「连接设备」,在弹窗中选择 <b>FoloPassport-Mic</b>。</li>
+      <li>按住设备上的 <b>OK</b> 说话 —— 本页实时播放、电平条跳动。</li>
+      <li>「开始录制」后再说话,「停止并保存 WAV」导出文件。</li>
+      <li>拖动增益滑块并「写入」,设备屏幕的 GAIN 条应同步变化。</li>
+    </ol>
+    <div class="warn">需要 Chrome / Edge(Safari 不支持 Web Bluetooth)。若直接打开本文件失败,
+      可在仓库目录运行 <code>python3 -m http.server</code> 后访问 http://localhost:8000/tools/ble_mic_client.html</div>
+  </div>
+</div>
+
+<script>
+"use strict";
+// 与 main/mic_ble.c 中的 UUID 保持一致(小写是 Web Bluetooth 的要求)
+const SVC_UUID   = "f0f02001-c332-4e21-b0a0-5a5d3c1e1000";
+const CHR_AUDIO  = "f0f02002-c332-4e21-b0a0-5a5d3c1e1000";
+const CHR_GAIN   = "f0f02003-c332-4e21-b0a0-5a5d3c1e1000";
+const SAMPLE_HZ  = 16000;
+
+const $ = (id) => document.getElementById(id);
+const meter = $("meter");
+for (let i = 0; i < 10; i++) meter.appendChild(document.createElement("i"));
+const meterBars = [...meter.children];
+
+let device = null, server = null, audioChr = null, gainChr = null;
+let audioCtx = null, nextTime = 0;
+let recording = false, recChunks = [], recSamples = 0, totalBytes = 0;
+let lastSeq = null, gaps = 0;
+
+function setStatus(t) { $("status").textContent = t; }
+
+// 每条通知 = [seq 1B][整数个 int16LE 样本](与 main/mic_ble.c 的帧格式一致)。
+// 丢包以整条通知为粒度:序号不连续时计数,音频里只会有一声"咔",不会持续杂音。
+function handlePcm(e) {
+  const dv = e.target.value;
+  if (dv.byteLength < 3) return;
+  const seq = dv.getUint8(0);
+  if (lastSeq !== null && ((lastSeq + 1) & 0xFF) !== seq) gaps++;
+  lastSeq = seq;
+
+  const n = (dv.byteLength - 1) >> 1;             // 本条样本数
+  if (!n) return;
+  const s = new Int16Array(n);
+  const f = new Float32Array(n);
+  let peak = 0;
+  for (let i = 0; i < n; i++) {
+    s[i] = dv.getInt16(1 + i * 2, true);
+    f[i] = s[i] / 32768;
+    const a = Math.abs(s[i]);
+    if (a > peak) peak = a;
+  }
+  play(f);
+  if (recording) { recChunks.push(s); recSamples += n; }
+  totalBytes += dv.byteLength - 1;
+  $("bytes").textContent = "收到 " + totalBytes + " 字节 · 丢块 " + gaps;
+  const bars = Math.round(peak / 32767 * 10);
+  meterBars.forEach((b, i) => {
+    b.className = i < bars ? (i < 6 ? "on1" : i < 8 ? "on2" : "on3") : "";
+  });
+}
+
+// 用 AudioBufferSourceNode 首尾相接排期,等价于一个恒定的实时播放队列
+function play(f) {
+  if (!audioCtx) return;
+  const buf = audioCtx.createBuffer(1, f.length, SAMPLE_HZ);
+  buf.copyToChannel(f, 0);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(audioCtx.destination);
+  if (nextTime < audioCtx.currentTime + 0.02) nextTime = audioCtx.currentTime + 0.02;
+  src.start(nextTime);
+  nextTime += f.length / SAMPLE_HZ;
+}
+
+async function connect() {
+  try {
+    setStatus("请选择设备…");
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: "FoloPassport" }],
+      optionalServices: [SVC_UUID],
+    });
+    device.addEventListener("gattserverdisconnected", () => {
+      setStatus("已断开"); resetUi();
+    });
+    server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SVC_UUID);
+    audioChr = await svc.getCharacteristic(CHR_AUDIO);
+    gainChr  = await svc.getCharacteristic(CHR_GAIN);
+    const g = await gainChr.readValue();
+    $("gain").value = g.getUint8(0);
+    $("gainVal").textContent = g.getUint8(0) + "%";
+    await audioChr.startNotifications();
+    audioChr.addEventListener("characteristicvaluechanged", handlePcm);
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    await audioCtx.resume();
+    nextTime = 0; totalBytes = 0; lastSeq = null; gaps = 0;
+    setStatus("已连接 " + (device.name || ""));
+    $("connect").disabled = true; $("disconnect").disabled = false;
+    $("gain").disabled = false; $("applyGain").disabled = false; $("rec").disabled = false;
+  } catch (err) {
+    setStatus("失败: " + err.message);
+    resetUi();
+  }
+}
+
+function resetUi() {
+  $("connect").disabled = false; $("disconnect").disabled = true;
+  $("gain").disabled = true; $("applyGain").disabled = true;
+  $("rec").disabled = true; $("stopRec").disabled = true;
+  meterBars.forEach((b) => (b.className = ""));
+}
+
+async function disconnect() {
+  try { if (device && device.gatt.connected) await device.gatt.disconnect(); } catch (e) {}
+  setStatus("已断开"); resetUi();
+}
+
+async function applyGain() {
+  if (!gainChr) return;
+  const v = Number($("gain").value);
+  try {
+    await gainChr.writeValue(Uint8Array.of(v));   // 与 bsp_audio_set_mic_gain 的 0..100 契约一致
+    setStatus("增益已写入: " + v + "%");
+  } catch (err) { setStatus("写入失败: " + err.message); }
+}
+
+function toggleRec() {
+  recording = true; recChunks = []; recSamples = 0;
+  $("rec").disabled = true; $("stopRec").disabled = false;
+  $("recStat").textContent = "录制中…";
+}
+
+function stopRec() {
+  recording = false;
+  $("rec").disabled = !audioChr; $("stopRec").disabled = true;
+  // 手工拼 WAV 头:单声道 16bit 16kHz
+  const dataLen = recSamples * 2;
+  const buf = new ArrayBuffer(44 + dataLen);
+  const v = new DataView(buf);
+  const str = (off, s) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + dataLen, true); str(8, "WAVEfmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, SAMPLE_HZ, true); v.setUint32(28, SAMPLE_HZ * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, dataLen, true);
+  let off = 44;
+  for (const c of recChunks) {
+    new Int16Array(buf, off, c.length).set(c);
+    off += c.length * 2;
+  }
+  const url = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = "folopassport-mic.wav"; a.textContent = "下载 folopassport-mic.wav(" + recSamples + " 样本)";
+  $("dlRow").innerHTML = ""; $("dlRow").appendChild(a);
+  $("recStat").textContent = "已停止,可下载";
+}
+
+$("connect").onclick = connect;
+$("disconnect").onclick = disconnect;
+$("applyGain").onclick = applyGain;
+$("rec").onclick = toggleRec;
+$("stopRec").onclick = stopRec;
+$("gain").oninput = () => { $("gainVal").textContent = $("gain").value + "%"; };
+</script>
+</body>
+</html>
